@@ -732,7 +732,7 @@ $(ufw status verbose 2>/dev/null || echo "UFW未配置")
 
 === SSH配置 ===
 
-$(sshd -T 2>/dev/null | egrep 'permitrootlogin|passwordauthentication|pubkeyauthentication|port' | column -t)
+$(sshd -T 2>/dev/null | egrep 'permitrootlogin|passwordauthentication|pubkeyauthentication|port')
 
 === 监听端口 ===
 
@@ -827,11 +827,11 @@ print_summary() {
     echo "  ✓ 基线文档: 已生成"
     echo ""
     echo -e "${YELLOW}下一步:${NC}"
-    echo "  1. ${YELLOW}在新终端中测试SSH访问，确认成功后再关闭当前会话！${NC}"
-    echo "  2. 查看时间同步: ${CYAN}timedatectl status${NC}"
-    echo "  3. 查看防火墙: ${CYAN}sudo ufw status verbose${NC}"
-    echo "  4. 检查服务: ${CYAN}systemctl status fail2ban${NC}"
-    echo "  5. 查看基线: ${CYAN}cat ~/baseline/*-system-baseline.txt${NC}"
+    echo -e "  1. ${YELLOW}在新终端中测试SSH访问，确认成功后再关闭当前会话！${NC}"
+    echo -e "  2. 查看时间同步: ${CYAN}timedatectl status${NC}"
+    echo -e "  3. 查看防火墙: ${CYAN}sudo ufw status verbose${NC}"
+    echo -e "  4. 检查服务: ${CYAN}systemctl status fail2ban${NC}"
+    echo -e "  5. 查看基线: ${CYAN}cat ~/baseline/*-system-baseline.txt${NC}"
     echo ""
     echo -e "${RED}⚠ 重要: 请保持当前会话打开，直到确认SSH可以正常登录！${NC}"
     echo ""
@@ -860,6 +860,10 @@ run_auto_mode() {
         exit 1
     fi
 
+    # Ask for hostname FIRST (before confirmation)
+    echo ""
+    read -p "$(echo -e "${YELLOW}?${NC}" "是否修改主机名？(留空跳过): ")" hostname_input
+
     if ! ask_yes_no "确认开始自动配置？" "N"; then
         echo -e "${YELLOW}已取消${NC}"
         exit 0
@@ -874,15 +878,22 @@ run_auto_mode() {
     configure_timezone
     configure_time_sync
 
-    # Ask for hostname
-    echo ""
-    read -p "$(echo -e "${YELLOW}?${NC}" "是否设置主机名？(留空跳过): ")" hostname_input
-    configure_hostname "$hostname_input"
+    # Configure hostname (if provided)
+    if [ -n "$hostname_input" ]; then
+        configure_hostname "$hostname_input"
+    fi
 
     # SSH, Firewall (no prompt needed)
     configure_ssh
     local ssh_success=$?
-    configure_firewall
+
+    # Check if firewall already configured
+    if command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+        echo ""
+        echo -e "${GREEN}✓ 防火墙已配置，跳过${NC}"
+    else
+        configure_firewall
+    fi
 
     # Skip memory optimization in auto mode
     echo ""
