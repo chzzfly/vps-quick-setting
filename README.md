@@ -1,6 +1,6 @@
 # 新VPS一键设置脚本
 
-让新手的VPS安全起来！
+Make 新手的 VPS 安全 Again
 
 ## 用法
 
@@ -26,11 +26,22 @@ sudo ./vps-quick-setting.sh --auto
 - ✅ **内存优化**: Swap（自动跳过）
 - ✅ **生成基线文档**: ~/baseline/YYMMDDHHMM-system-baseline.txt
 
-## 从GitHub下载脚本
+## 从GitHub下载并运行脚本
 
+**方式一：下载后执行**（推荐新手，可以先查看文件内容）
 ```bash
 curl -O https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh
 sudo bash vps-quick-setting.sh
+```
+
+**方式二：一行命令下载并执行**
+```bash
+curl -O https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh && sudo bash vps-quick-setting.sh
+```
+
+**方式三：直接执行，不保存文件**
+```bash
+curl -sL https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh | sudo bash
 ```
 
 ## 手动设置密钥登录
