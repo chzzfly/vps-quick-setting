@@ -33,7 +33,7 @@ curl -O https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.
 sudo bash vps-quick-setting.sh
 ```
 
-## 快速上手
+## 手动设置密钥登录
 
 ### 1. 设置SSH密钥（在本地电脑）
 
@@ -57,15 +57,6 @@ exit
 
 ```bash
 ssh root@你的VPS_IP
-```
-
-### 4. 上传并运行脚本
-
-```bash
-# 在脚本目录下执行，上传到你的root目录下
-scp vps-quick-setting.sh root@你的VPS_IP:/root/
-ssh root@你的VPS_IP
-sudo bash vps-quick-setting.sh
 ```
 
 ## 验证配置
@@ -105,7 +96,3 @@ sudo ufw allow 5432/tcp           # PostgreSQL
 - 创建普通用户: `adduser user`
 - 配置sudo: `usermod -aG sudo user`
 - 重启SSH: `sudo systemctl restart sshd`
-
-## License
-
-MIT
