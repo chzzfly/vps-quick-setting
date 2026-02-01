@@ -5,9 +5,9 @@
 #
 # 用法: sudo ./vps-quick-setting.sh #交互式执行
 #
-# 自动执行: sudo ./vps-quick-setting.sh --auto #快速自动配置模式（使用默认预设，无交互）
+# 自动执行: sudo ./vps-quick-setting.sh --auto #快速自动配置模式
 # 自动配置内容
-# ✅ 主机名: 询问是否更改
+# ✅ 主机名: 可选设置（会询问一次，直接按回车跳过）
 # ✅ 时区: Asia/Shanghai (UTC+8)
 # ✅ 时间同步: chrony 自动同步
 # ✅ SSH安全:
@@ -15,9 +15,9 @@
 #    • 密码认证: 禁用（防暴力破解）
 #    • Root登录: 强制密钥登录
 #    • Fail2ban: 5次失败封禁1小时
-# ✅ 防火墙: 入站拒绝 | 转发拒绝 | 出站允许；放行22/80/443端口
+# ✅ 防火墙: 入站拒绝 | 转发拒绝 | 出站允许；放行22/80/443端口（已配置则跳过）
 # ✅ 内存优化: Swap（自动跳过）
-# ✅ 生成基线文档: ~/baseline/YYYY-MM-DD-HHMMSS-system-baseline.txt
+# ✅ 生成基线文档: ~/baseline/YYMMDDHHMM-system-baseline.txt
 ##############################################################################
 # 从GitHub下载脚本
 ##############################################################################
@@ -56,7 +56,8 @@
 # sudo ufw status verbose            # 查看防火墙
 # sudo systemctl status fail2ban    # 查看fail2ban
 # free -h                            # 查看内存
-# cat ~/baseline/*-system-baseline.txt  # 查看基线（文件名含时间戳）
+# ls ~/baseline/                     # 列出所有基线文件
+# cat ~/baseline/最新文件名.txt       # 查看指定基线文件
 #
 ##############################################################################
 # 开放其他端口（示例）
@@ -113,7 +114,7 @@ print_banner() {
 # Check for SSH key
 check_ssh_key() {
     if [ ! -f ~/.ssh/authorized_keys ] && [ ! -f /root/.ssh/authorized_keys ]; then
-        echo -e "${RED}✗ 未找到SSH authorized_keys！${NC}"
+        echo -e "${RED}✗ 未发现SSH authorized_keys！${NC}"
         echo -e "${YELLOW}请先配置SSH密钥:${NC}"
         echo "  1. ssh-keygen -t ed25519  # 在本地电脑"
         echo "  2. cat ~/.ssh/id_ed25519.pub"
@@ -122,7 +123,6 @@ check_ssh_key() {
         echo "  5. chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
         return 1
     fi
-    echo -e "${GREEN}✓ 找到SSH authorized_keys${NC}"
     return 0
 }
 
@@ -154,7 +154,7 @@ detect_os() {
 
 # Update package lists
 update_system() {
-    echo -e "${CYAN}→ 更新软件包列表...${NC}"
+    echo -e "${CYAN}→ apt update${NC}"
     apt update -qq
     echo -e "${GREEN}✓ 软件包列表已更新${NC}"
 }
@@ -168,14 +168,14 @@ configure_timezone() {
         return
     fi
 
-    echo -e "${CYAN}→ 设置时区为 Asia/Shanghai (当前: $current_tz)...${NC}"
+    echo -e "${CYAN}→ timedatectl set-timezone Asia/Shanghai${NC}"
     timedatectl set-timezone Asia/Shanghai
     echo -e "${GREEN}✓ 时区已设置为 Asia/Shanghai${NC}"
 }
 
 # Sync time with NTP
 configure_time_sync() {
-    echo -e "${CYAN}→ 配置时间同步服务...${NC}"
+    echo -e "${CYAN}→ 安装并启用 chrony${NC}"
 
     # Check if chrony is installed
     if command -v chronyd &> /dev/null; then
@@ -226,7 +226,7 @@ configure_hostname() {
         return
     fi
 
-    echo -e "${CYAN}→ 设置主机名为 $hostname_input (当前: $current_hostname)...${NC}"
+    echo -e "${CYAN}→ hostnamectl set-hostname $hostname_input${NC}"
 
     # Use hostnamectl (updates /etc/hostname automatically)
     hostnamectl set-hostname "$hostname_input"
@@ -247,7 +247,7 @@ configure_hostname() {
 
 # Install and configure fail2ban
 install_fail2ban() {
-    echo -e "${CYAN}→ 安装 fail2ban...${NC}"
+    echo -e "${CYAN}→ apt install -y fail2ban${NC}"
     apt install -y fail2ban >/dev/null 2>&1
 
     # Create basic configuration
@@ -272,7 +272,7 @@ EOF
 
 # SSH Security Hardening
 configure_ssh() {
-    echo -e "${CYAN}→ 配置SSH安全...${NC}"
+    echo -e "${CYAN}→ 配置 SSH (禁用密码登录 + 启用 fail2ban)${NC}"
 
     # Check for SSH key
     if ! check_ssh_key; then
@@ -328,41 +328,53 @@ configure_ssh() {
 
 # Configure Firewall
 configure_firewall() {
-    echo -e "${CYAN}→ 防火墙配置${NC}"
-    echo ""
-
-    # 显示当前状态
-    if command -v ufw &> /dev/null; then
-        echo -e "${YELLOW}当前状态:${NC}"
-        if ufw status 2>/dev/null | grep -q "Status: active"; then
-            echo "  UFW: ✓ 已启用"
-            echo ""
-            ufw status 2>/dev/null | head -10
-            echo ""
-
-            # 询问是否重新配置
-            if ! ask_yes_no "是否重新配置防火墙？" "N"; then
-                echo -e "${YELLOW}⊘ 保持现有配置${NC}"
-                return
-            fi
-        else
-            echo "  UFW: ✗ 未启用"
-            echo ""
+    # Check if running in auto mode
+    if [ "$AUTO_MODE" = true ]; then
+        # Auto mode: silent configuration
+        if ufw status 2>/dev/null | grep -q "active"; then
+            echo -e "${GREEN}✓ 防火墙已配置，跳过${NC}"
+            return
         fi
     else
-        echo -e "${YELLOW}当前状态:${NC}"
-        echo "  UFW: ✗ 未安装"
+        # Interactive mode: show current status and ask
+        echo -e "${CYAN}→ 配置 UFW 防火墙${NC}"
         echo ""
-    fi
 
-    # 询问是否配置防火墙
-    if ! ask_yes_no "是否配置防火墙？" "Y"; then
-        echo -e "${YELLOW}⊘ 跳过防火墙配置${NC}"
-        return
+        # 显示当前状态
+        if command -v ufw &> /dev/null; then
+            echo -e "${YELLOW}当前状态:${NC}"
+            if ufw status 2>/dev/null | grep -q "Status: active"; then
+                echo "  UFW: ✓ 已启用"
+                echo ""
+                ufw status 2>/dev/null | head -10
+                echo ""
+
+                # 询问是否重新配置
+                if ! ask_yes_no "是否重新配置防火墙？" "N"; then
+                    echo -e "${YELLOW}⊘ 保持现有配置${NC}"
+                    return
+                fi
+            else
+                echo "  UFW: ✗ 未启用"
+                echo ""
+            fi
+        else
+            echo -e "${YELLOW}当前状态:${NC}"
+            echo "  UFW: ✗ 未安装"
+            echo ""
+        fi
+
+        # 询问是否配置防火墙
+        if ! ask_yes_no "是否配置防火墙？" "Y"; then
+            echo -e "${YELLOW}⊘ 跳过防火墙配置${NC}"
+            return
+        fi
     fi
 
     # Install UFW
-    echo -e "${CYAN}→ 配置UFW防火墙...${NC}"
+    if [ "$AUTO_MODE" != true ]; then
+        echo -e "${CYAN}→ 配置 UFW 防火墙${NC}"
+    fi
     apt install -y ufw >/dev/null 2>&1
 
     # Configure default policies (标准安全策略)
@@ -687,12 +699,12 @@ show_main_menu() {
 
 # Generate Baseline
 generate_baseline() {
-    echo -e "${CYAN}→ 生成系统基线文档...${NC}"
+    echo -e "${CYAN}→ 生成系统基线文档 (~/baseline/)${NC}"
 
     BASELINE_DIR="$HOME/baseline"
     mkdir -p "$BASELINE_DIR"
 
-    TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
+    TIMESTAMP=$(date +%y%m%d%H%M)
     OUTPUT_FILE="$BASELINE_DIR/${TIMESTAMP}-system-baseline.txt"
 
     # Write to file directly instead of using redirection
@@ -706,11 +718,10 @@ VPS 系统基线
 
 === 系统信息 ===
 
-$(cat /etc/os-release | grep -E "^(NAME|VERSION)= ")
-
-$(uname -r)
-
-$(uptime)
+操作系统: $(cat /etc/os-release | grep '^PRETTY_NAME=' | cut -d'"' -f2)
+内核版本: $(uname -r)
+运行时间: $(uptime -p)
+系统负载: $(uptime | awk -F'load average:' '{print $2}')
 
 === 时间和时区 ===
 
@@ -732,7 +743,7 @@ $(ufw status verbose 2>/dev/null || echo "UFW未配置")
 
 === SSH配置 ===
 
-$(sshd -T 2>/dev/null | egrep 'permitrootlogin|passwordauthentication|pubkeyauthentication|port')
+$(sshd -T 2>/dev/null | egrep '^(permitrootlogin|passwordauthentication|pubkeyauthentication|port) ')
 
 === 监听端口 ===
 
@@ -831,9 +842,7 @@ print_summary() {
     echo -e "  2. 查看时间同步: ${CYAN}timedatectl status${NC}"
     echo -e "  3. 查看防火墙: ${CYAN}sudo ufw status verbose${NC}"
     echo -e "  4. 检查服务: ${CYAN}systemctl status fail2ban${NC}"
-    echo -e "  5. 查看基线: ${CYAN}cat ~/baseline/*-system-baseline.txt${NC}"
-    echo ""
-    echo -e "${RED}⚠ 重要: 请保持当前会话打开，直到确认SSH可以正常登录！${NC}"
+    echo -e "  5. 查看基线: ${CYAN}ls ~/baseline/${NC}"
     echo ""
 }
 
@@ -844,11 +853,30 @@ run_auto_mode() {
     echo -e "${RED}║${NC}  ${YELLOW}⚠ 快速自动配置模式${NC}                                  ${RED}║${NC}"
     echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
+
+    # Ask for hostname FIRST (before anything else)
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    read -p "$(echo -e "${YELLOW}?${NC}" "请输入新主机名（直接按回车跳过）: ")" hostname_input
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+    if [ -n "$hostname_input" ]; then
+        echo ""
+        echo -e "${CYAN}→ hostnamectl set-hostname $hostname_input${NC}"
+    else
+        echo ""
+        echo -e "${YELLOW}⊘ 跳过主机名设置${NC}"
+    fi
+
+    echo ""
     echo -e "${YELLOW}即将执行以下操作:${NC}"
     echo "  ✓ apt update"
     echo "  ✓ timedatectl set-timezone Asia/Shanghai"
     echo "  ✓ 启用 chrony 时间同步"
-    echo "  ? 主机名: 交互式选择"
+    if [ -n "$hostname_input" ]; then
+        echo "  ✓ 主机名: $hostname_input"
+    else
+        echo "  ⊘ 主机名: 跳过"
+    fi
     echo "  ✓ SSH: 禁用密码登录 + 启用Fail2ban"
     echo "  ✓ ufw: 允许 SSH/HTTP/HTTPS"
     echo "  ⊘ 内存优化: 自动跳过"
@@ -858,15 +886,6 @@ run_auto_mode() {
     # Check for SSH key
     if ! check_ssh_key; then
         exit 1
-    fi
-
-    # Ask for hostname FIRST (before confirmation)
-    echo ""
-    read -p "$(echo -e "${YELLOW}?${NC}" "是否修改主机名？(留空跳过): ")" hostname_input
-
-    if ! ask_yes_no "确认开始自动配置？" "N"; then
-        echo -e "${YELLOW}已取消${NC}"
-        exit 0
     fi
 
     echo ""
