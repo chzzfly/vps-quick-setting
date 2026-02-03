@@ -326,14 +326,34 @@ configure_ssh() {
     return 0
 }
 
+# Check if package is actually installed
+is_package_installed() {
+    dpkg -l "$1" 2>/dev/null | grep -q "^ii"
+}
+
+# Wait for apt lock to be released
+wait_for_apt() {
+    local timeout=300
+    local waited=0
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [ $waited -ge $timeout ]; then
+            echo -e "${RED}✗ 等待apt锁超时${NC}"
+            return 1
+        fi
+        echo "等待其他apt进程完成..."
+        sleep 5
+        waited=$((waited + 5))
+    done
+}
+
 # Configure Firewall
 configure_firewall() {
     # Check if running in auto mode
     if [ "$AUTO_MODE" = true ]; then
         # Auto mode: silent configuration
-        if ufw status 2>/dev/null | grep -q "active"; then
+        if is_package_installed ufw && command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
             echo -e "${GREEN}✓ 防火墙已配置，跳过${NC}"
-            return
+            return 0
         fi
     else
         # Interactive mode: show current status and ask
@@ -352,7 +372,7 @@ configure_firewall() {
                 # 询问是否重新配置
                 if ! ask_yes_no "是否重新配置防火墙？" "N"; then
                     echo -e "${YELLOW}⊘ 保持现有配置${NC}"
-                    return
+                    return 0
                 fi
             else
                 echo "  UFW: ✗ 未启用"
@@ -367,36 +387,107 @@ configure_firewall() {
         # 询问是否配置防火墙
         if ! ask_yes_no "是否配置防火墙？" "Y"; then
             echo -e "${YELLOW}⊘ 跳过防火墙配置${NC}"
-            return
+            return 0
         fi
     fi
 
+    # Wait for apt lock
+    wait_for_apt || return 1
+
     # Update package lists first
     echo -e "${CYAN}→ apt update${NC}"
-    apt update -qq
+    if ! apt update -qq; then
+        echo -e "${RED}✗ apt update 失败${NC}"
+        return 1
+    fi
 
     # Install UFW
     if [ "$AUTO_MODE" != true ]; then
         echo -e "${CYAN}→ 安装 UFW 防火墙${NC}"
     fi
-    apt install -y ufw >/dev/null 2>&1
 
-    # Configure default policies (标准安全策略)
-    ufw default deny incoming >/dev/null 2>&1
-    ufw default deny routed >/dev/null 2>&1
-    ufw default allow outgoing >/dev/null 2>&1
+    # 清理可能存在的残留配置
+    if dpkg -l ufw 2>/dev/null | grep -q "^rc"; then
+        echo "清理残留的UFW配置..."
+        dpkg --purge ufw >/dev/null 2>&1 || true
+    fi
+
+    # 安装ufw并捕获输出
+    local install_output install_exit_code
+    install_output=$(apt install -y ufw 2>&1)
+    install_exit_code=$?
+
+    if [ $install_exit_code -ne 0 ]; then
+        echo -e "${RED}✗ UFW 安装失败 (exit code: $install_exit_code)${NC}"
+        echo "安装输出："
+        echo "$install_output"
+        return 1
+    fi
+
+    # 验证ufw是否真的安装了
+    if ! is_package_installed ufw; then
+        echo -e "${RED}✗ UFW 包未正确安装${NC}"
+        echo "尝试手动排查问题..."
+        echo "当前ufw包状态："
+        dpkg -l ufw 2>&1 || true
+        return 1
+    fi
+
+    # 验证ufw命令可用
+    if ! command -v ufw &> /dev/null; then
+        echo -e "${RED}✗ UFW 命令不可用，尝试重新安装${NC}"
+        apt install --reinstall -y ufw 2>&1 || {
+            echo -e "${RED}✗ UFW 重新安装失败${NC}"
+            return 1
+        }
+    fi
+
+    # Configure default policies
+    echo -e "${CYAN}→ 配置防火墙策略${NC}"
+    if ! ufw default deny incoming; then
+        echo -e "${RED}✗ 配置入站策略失败${NC}"
+        return 1
+    fi
+    ufw default deny routed >/dev/null 2>&1 || true
+    if ! ufw default allow outgoing; then
+        echo -e "${RED}✗ 配置出站策略失败${NC}"
+        return 1
+    fi
 
     # Allow SSH, HTTP, HTTPS
-    ufw allow 22/tcp >/dev/null 2>&1
-    ufw allow 80/tcp >/dev/null 2>&1
-    ufw allow 443/tcp >/dev/null 2>&1
+    echo -e "${CYAN}→ 放行必要端口${NC}"
+    if ! ufw allow 22/tcp comment 'SSH'; then
+        echo -e "${RED}✗ 放行SSH端口失败${NC}"
+        return 1
+    fi
+    if ! ufw allow 80/tcp comment 'HTTP'; then
+        echo -e "${RED}✗ 放行HTTP端口失败${NC}"
+        return 1
+    fi
+    if ! ufw allow 443/tcp comment 'HTTPS'; then
+        echo -e "${RED}✗ 放行HTTPS端口失败${NC}"
+        return 1
+    fi
 
     # Enable
-    echo "y" | ufw enable >/dev/null 2>&1
+    echo -e "${CYAN}→ 启用防火墙${NC}"
+    if ! echo "y" | ufw enable; then
+        echo -e "${RED}✗ 启用防火墙失败${NC}"
+        return 1
+    fi
+
+    # 验证配置结果
+    echo -e "${CYAN}→ 验证防火墙配置${NC}"
+    if ! ufw status 2>/dev/null | grep -q "Status: active"; then
+        echo -e "${RED}✗ 防火墙未能正常启用${NC}"
+        return 1
+    fi
 
     echo -e "${GREEN}✓ 防火墙已配置${NC}"
     echo "  默认策略: 入站拒绝 | 转发拒绝 | 出站允许"
     echo "  已放行: SSH (22), HTTP (80), HTTPS (443)"
+    echo ""
+    ufw status verbose | head -10
 }
 
 # Create Swap
@@ -632,7 +723,7 @@ show_system_status() {
 
     # 防火墙配置
     echo -e "${YELLOW}防火墙配置:${NC}"
-    if command -v ufw &> /dev/null; then
+    if is_package_installed ufw && command -v ufw &> /dev/null; then
         # 状态
         local ufw_status=$(ufw status 2>/dev/null | head -1)
         echo "  UFW状态: $ufw_status"
@@ -673,13 +764,16 @@ show_main_menu() {
 
     # Firewall status
     local fw_status=""
-    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+    if is_package_installed ufw && command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         fw_status="防火墙:✓"
     else
         fw_status="防火墙:✗"
     fi
 
-    clear
+    # 只在有TTY时清屏，避免在管道/CI环境中出错
+    if [ -t 1 ]; then
+        clear
+    fi
     print_banner
 
     # Status summary line
@@ -743,7 +837,7 @@ $(df -h)
 
 === 防火墙 ===
 
-$(ufw status verbose 2>/dev/null || echo "UFW未配置")
+$(if is_package_installed ufw && command -v ufw &> /dev/null; then ufw status verbose 2>/dev/null; else echo "UFW未安装"; fi)
 
 === SSH配置 ===
 
@@ -911,11 +1005,14 @@ run_auto_mode() {
     local ssh_success=$?
 
     # Check if firewall already configured
-    if command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+    if is_package_installed ufw && command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         echo ""
-        echo -e "${GREEN}✓ 防火墙已配置，跳过${NC}"
+        echo -e "${GREEN}✓ 防火墙已配置且运行正常，跳过${NC}"
     else
-        configure_firewall
+        configure_firewall || {
+            echo -e "${RED}✗ 防火墙配置失败${NC}"
+            echo -e "${YELLOW}⚠ 请手动检查系统防火墙状态${NC}"
+        }
     fi
 
     # Skip memory optimization in auto mode
