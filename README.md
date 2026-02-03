@@ -1,4 +1,4 @@
-# 新VPS一键设置脚本
+# 新 VPS 一键设置脚本
 
 Make 新手的 VPS 安全 Again
 
@@ -30,18 +30,19 @@ sudo ./vps-quick-setting.sh --auto
 
 **方式一：下载后执行**（推荐新手，可以先查看文件内容）
 ```bash
-curl -O https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh
+curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh
+chmod +x vps-quick-setting.sh
 sudo bash vps-quick-setting.sh
 ```
 
 **方式二：一行命令下载并执行**
 ```bash
-curl -O https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh && sudo bash vps-quick-setting.sh
+curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh && chmod +x vps-quick-setting.sh && sudo bash vps-quick-setting.sh
 ```
 
 **方式三：直接执行，不保存文件**
 ```bash
-curl -sL https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh | sudo bash
+curl -fsSL https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh | sudo bash
 ```
 
 ## 手动设置密钥登录

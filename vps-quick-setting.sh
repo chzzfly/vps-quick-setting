@@ -371,9 +371,13 @@ configure_firewall() {
         fi
     fi
 
+    # Update package lists first
+    echo -e "${CYAN}→ apt update${NC}"
+    apt update -qq
+
     # Install UFW
     if [ "$AUTO_MODE" != true ]; then
-        echo -e "${CYAN}→ 配置 UFW 防火墙${NC}"
+        echo -e "${CYAN}→ 安装 UFW 防火墙${NC}"
     fi
     apt install -y ufw >/dev/null 2>&1
 
