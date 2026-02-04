@@ -1,89 +1,9 @@
 #!/bin/bash
 
-##############################################################################
 # 新VPS一键设置脚本
-#
-# 用法: sudo ./vps-quick-setting.sh #交互式执行
-#
-# 自动执行: sudo ./vps-quick-setting.sh --auto #快速自动配置模式
-# 自动配置内容
-# ✅ 主机名: 可选设置（会询问一次，直接按回车跳过）
-# ✅ 时区: Asia/Shanghai (UTC+8)
-# ✅ 时间同步: chrony 自动同步
-# ✅ SSH安全:
-#    • 密钥认证: 启用
-#    • 密码认证: 禁用（防暴力破解）
-#    • Root登录: 强制密钥登录
-#    • Fail2ban: 5次失败封禁1小时
-# ✅ 防火墙: 入站拒绝 | 转发拒绝 | 出站允许；放行22/80/443端口（已配置则跳过）
-# ✅ 内存优化: Swap（自动跳过）
-# ✅ 生成基线文档: ~/baseline/YYMMDDHHMM-system-baseline.txt
-##############################################################################
-# 从GitHub下载脚本
-##############################################################################
-#
-# curl -O https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh
-# sudo bash vps-quick-setting.sh
-#
-##############################################################################
-# 快速上手
-# 1. 设置SSH密钥（在本地电脑）
-#    ssh-keygen -t ed25519
-#    cat ~/.ssh/id_ed25519.pub    # 复制公钥
-#
-# 2. 登录VPS并添加公钥
-#    ssh root@你的VPS_IP           # 首次密码登录
-#    mkdir -p ~/.ssh
-#    echo "粘贴公钥" >> ~/.ssh/authorized_keys
-#    chmod 700 ~/.ssh
-#    chmod 600 ~/.ssh/authorized_keys
-#    exit
-#
-# 3. 测试密钥登录（应该不需要密码）
-#    ssh root@你的VPS_IP
-#
-# 4. 上传并运行脚本
-#    scp vps-quick-setting.sh root@你的VPS_IP:/root/ #在脚本目录下执行，上传到你的root目录下
-#    ssh root@你的VPS_IP
-#    sudo bash vps-quick-setting.sh
-#
-##############################################################################
-# 验证配置
-#
-# timedatectl status                 # 查看时区和时间同步
-# chronyc tracking                   # 查看NTP同步详情
-# hostname                           # 查看主机名
-# sudo ufw status verbose            # 查看防火墙
-# sudo systemctl status fail2ban    # 查看fail2ban
-# free -h                            # 查看内存
-# ls ~/baseline/                     # 列出所有基线文件
-# cat ~/baseline/最新文件名.txt       # 查看指定基线文件
-#
-##############################################################################
-# 开放其他端口（示例）
-#
-# sudo ufw allow 8080/tcp            # 备用HTTP
-# sudo ufw allow 3306/tcp           # MySQL
-# sudo ufw allow 5432/tcp           # PostgreSQL
-#
-##############################################################################
-# 故障排除
-##############################################################################
-#
-# 被锁定SSH外？
-#   → 用VPS提供商控制台登录
-#   → sudo vim /etc/ssh/sshd_config
-#   → 改为: PasswordAuthentication yes
-#   → sudo systemctl restart sshd
-#
-# 想禁止root登录？
-#   → sudo vim /etc/ssh/sshd_config
-#   → 改为: PermitRootLogin no
-#   → 创建普通用户: adduser user
-#   → 配置sudo: usermod -aG sudo user
-#   → 重启SSH: sudo systemctl restart sshd
-#
-##############################################################################
+# 用法: sudo ./vps-quick-setting.sh        # 交互式
+#       sudo ./vps-quick-setting.sh --auto # 自动配置
+# 详细说明见 README.md
 
 set -e
 
@@ -103,6 +23,22 @@ if [ "$1" = "--auto" ]; then
     AUTO_MODE=true
 fi
 
+# Detect current SSH port from sshd config
+get_ssh_port() {
+    local port
+    # 优先从运行的 sshd 获取配置
+    port=$(sshd -T 2>/dev/null | grep "^port " | awk '{print $2}')
+    # 如果获取失败，尝试从配置文件读取
+    if [ -z "$port" ]; then
+        port=$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
+    fi
+    # 默认值 22
+    echo "${port:-22}"
+}
+
+# Global SSH port (will be set once and reused)
+SSH_PORT=$(get_ssh_port)
+
 # Print banner
 print_banner() {
     echo ""
@@ -113,14 +49,20 @@ print_banner() {
 
 # Check for SSH key
 check_ssh_key() {
-    if [ ! -f ~/.ssh/authorized_keys ] && [ ! -f /root/.ssh/authorized_keys ]; then
+    # 获取实际用户的主目录（支持 sudo 场景）
+    local user_home
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        user_home=$(eval echo ~$SUDO_USER)
+    else
+        user_home="$HOME"
+    fi
+
+    if [ ! -f "$user_home/.ssh/authorized_keys" ] && [ ! -f /root/.ssh/authorized_keys ]; then
         echo -e "${RED}✗ 未发现SSH authorized_keys！${NC}"
         echo -e "${YELLOW}请先配置SSH密钥:${NC}"
-        echo "  1. ssh-keygen -t ed25519  # 在本地电脑"
-        echo "  2. cat ~/.ssh/id_ed25519.pub"
-        echo "  3. ssh root@服务器IP"
-        echo "  4. mkdir -p ~/.ssh && echo '公钥' >> ~/.ssh/authorized_keys"
-        echo "  5. chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+        echo "  1. 本地生成密钥: ssh-keygen -t ed25519"
+        echo "  2. 上传到VPS:    ssh-copy-id root@服务器IP"
+        echo "  3. 测试登录:     ssh root@服务器IP"
         return 1
     fi
     return 0
@@ -250,24 +192,25 @@ install_fail2ban() {
     echo -e "${CYAN}→ apt install -y fail2ban${NC}"
     apt install -y fail2ban >/dev/null 2>&1
 
-    # Create basic configuration
-    cat > /etc/fail2ban/jail.local <<'EOF'
+    # Create basic configuration (使用检测到的 SSH 端口)
+    # bantime=43200 (12小时), findtime=600 (10分钟内), maxretry=5 (失败5次)
+    cat > /etc/fail2ban/jail.local <<EOF
 [DEFAULT]
-bantime = 3600
+bantime = 43200
 findtime = 600
 maxretry = 5
 
 [sshd]
 enabled = true
-port = ssh
+port = ${SSH_PORT}
 filter = sshd
 logpath = /var/log/auth.log
 maxretry = 5
 EOF
 
     systemctl enable fail2ban >/dev/null 2>&1
-    systemctl start fail2ban >/dev/null 2>&1
-    echo -e "${GREEN}✓ fail2ban 已安装并配置${NC}"
+    systemctl restart fail2ban >/dev/null 2>&1
+    echo -e "${GREEN}✓ fail2ban 已安装并配置 (监控端口: ${SSH_PORT})${NC}"
 }
 
 # SSH Security Hardening
@@ -310,6 +253,13 @@ configure_ssh() {
 
     # 3. 不修改PermitRootLogin，保持默认（允许root密钥登录）
     #    这样新手仍然可以用root + 密钥登录
+
+    # Validate config before restart
+    if ! sshd -t; then
+        echo -e "${RED}✗ SSH配置验证失败，正在回滚...${NC}"
+        cp /etc/ssh/sshd_config.backup.* /etc/ssh/sshd_config 2>/dev/null || true
+        return 1
+    fi
 
     # Restart SSH
     systemctl restart sshd
@@ -456,7 +406,7 @@ configure_firewall() {
 
     # Allow SSH, HTTP, HTTPS
     echo -e "${CYAN}→ 放行必要端口${NC}"
-    if ! ufw allow 22/tcp comment 'SSH'; then
+    if ! ufw allow ${SSH_PORT}/tcp comment 'SSH'; then
         echo -e "${RED}✗ 放行SSH端口失败${NC}"
         return 1
     fi
@@ -485,7 +435,7 @@ configure_firewall() {
 
     echo -e "${GREEN}✓ 防火墙已配置${NC}"
     echo "  默认策略: 入站拒绝 | 转发拒绝 | 出站允许"
-    echo "  已放行: SSH (22), HTTP (80), HTTPS (443)"
+    echo "  已放行: SSH (${SSH_PORT}), HTTP (80), HTTPS (443)"
     echo ""
     ufw status verbose | head -10
 }
@@ -562,8 +512,7 @@ ask_yes_no() {
 fmt_mb() {
     local v=$1
     if [ $v -ge 1024 ]; then
-        local g=$((v * 10 / 1024))
-        echo "${g:0:1}.${g:1}GB"
+        echo "$(awk "BEGIN {printf \"%.1f\", $v/1024}")GB"
     else
         echo "${v}MB"
     fi
@@ -679,7 +628,14 @@ show_system_status() {
 
     # SSH配置（合并 Fail2ban）
     echo -e "${YELLOW}SSH配置:${NC}"
-    if [ -f ~/.ssh/authorized_keys ] || [ -f /root/.ssh/authorized_keys ]; then
+    # 检测实际用户的密钥（支持 sudo 场景）
+    local ssh_user_home
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        ssh_user_home=$(eval echo ~$SUDO_USER)
+    else
+        ssh_user_home="$HOME"
+    fi
+    if [ -f "$ssh_user_home/.ssh/authorized_keys" ] || [ -f /root/.ssh/authorized_keys ]; then
         echo "  密钥认证: ✓ 已配置"
     else
         echo "  密钥认证: ✗ 未配置"
@@ -754,9 +710,15 @@ show_main_menu() {
     local hostname=$(hostname)
     local timezone=$(timedatectl | grep "Time zone" | awk '{print $3}')
 
-    # SSH status
+    # SSH status（支持 sudo 场景）
     local ssh_status=""
-    if [ -f ~/.ssh/authorized_keys ] || [ -f /root/.ssh/authorized_keys ]; then
+    local menu_user_home
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        menu_user_home=$(eval echo ~$SUDO_USER)
+    else
+        menu_user_home="$HOME"
+    fi
+    if [ -f "$menu_user_home/.ssh/authorized_keys" ] || [ -f /root/.ssh/authorized_keys ]; then
         ssh_status="SSH:密钥✓"
     else
         ssh_status="SSH:未配置"
@@ -797,9 +759,17 @@ show_main_menu() {
 
 # Generate Baseline
 generate_baseline() {
-    echo -e "${CYAN}→ 生成系统基线文档 (~/baseline/)${NC}"
+    # 确定正确的用户主目录（sudo 运行时 $HOME 可能不正确）
+    local user_home
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        user_home=$(eval echo ~$SUDO_USER)
+    else
+        user_home="$HOME"
+    fi
 
-    BASELINE_DIR="$HOME/baseline"
+    echo -e "${CYAN}→ 生成系统基线文档 ($user_home/baseline/)${NC}"
+
+    BASELINE_DIR="$user_home/baseline"
     mkdir -p "$BASELINE_DIR"
 
     TIMESTAMP=$(date +%y%m%d%H%M)
@@ -931,7 +901,7 @@ print_summary() {
     [ "$show_all" = "1" ] && echo "  ✓ 时区: Asia/Shanghai"
     [ "$show_all" = "1" ] && echo "  ✓ 时间同步: chrony已启用"
     [ -n "$hostname_result" ] && echo "  ✓ 主机名: $hostname_result"
-    [ "$show_all" = "1" -o "$ssh_result" != "" ] && echo "  ✓ SSH: 仅密钥登录，已启用fail2ban"
+    [ "$show_all" = "1" -o "$ssh_result" != "" ] && echo "  ✓ SSH: 仅密钥登录，fail2ban已启用（10分钟5次失败封禁12小时）"
     [ "$show_all" = "1" ] && echo "  ✓ 防火墙: 入站拒绝 | 转发拒绝 | 出站允许"
     echo "  ✓ 基线文档: 已生成"
     echo ""
@@ -976,7 +946,7 @@ run_auto_mode() {
         echo "  ⊘ 主机名: 跳过"
     fi
     echo "  ✓ SSH: 禁用密码登录 + 启用Fail2ban"
-    echo "  ✓ ufw: 允许 SSH/HTTP/HTTPS"
+    echo "  ✓ ufw: 允许 SSH(${SSH_PORT})/HTTP/HTTPS"
     echo "  ⊘ 内存优化: 自动跳过"
     echo "  ✓ 生成系统状态文档"
     echo ""
