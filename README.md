@@ -2,6 +2,25 @@
 
 Make 新手的 VPS 安全 Again
 
+## 从GitHub下载并运行脚本
+
+**方式一：下载后执行**（推荐新手，可以先查看文件内容）
+```bash
+curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh
+chmod +x vps-quick-setting.sh
+sudo ./vps-quick-setting.sh
+```
+
+**方式二：一行命令下载并执行**（交互式）
+```bash
+curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh && chmod +x vps-quick-setting.sh && sudo ./vps-quick-setting.sh
+```
+
+**方式三：一行命令下载并执行**（自动配置）
+```bash
+curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh && chmod +x vps-quick-setting.sh && sudo ./vps-quick-setting.sh --auto
+```
+
 ## 用法
 
 ```bash
@@ -18,6 +37,7 @@ sudo ./vps-quick-setting.sh --auto
 - ✅ **时区**: Asia/Shanghai (UTC+8)
 - ✅ **时间同步**: chrony 自动同步
 - ✅ **SSH安全**:
+  - 端口修改: 交互模式可选修改，自动配置则不修改
   - 密钥认证: 启用
   - 密码认证: 禁用（防暴力破解）
   - Root登录: 强制密钥登录
@@ -26,19 +46,6 @@ sudo ./vps-quick-setting.sh --auto
 - ✅ **内存优化**: Swap（自动跳过）
 - ✅ **生成基线文档**: ~/baseline/YYMMDDHHMM-system-baseline.txt
 
-## 从GitHub下载并运行脚本
-
-**方式一：下载后执行**（推荐新手，可以先查看文件内容）
-```bash
-curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh
-chmod +x vps-quick-setting.sh
-sudo ./vps-quick-setting.sh
-```
-
-**方式二：一行命令下载并执行**
-```bash
-curl -fsSL -o vps-quick-setting.sh https://github.com/chzzfly/vps-quick-setting/raw/main/vps-quick-setting.sh && chmod +x vps-quick-setting.sh && sudo ./vps-quick-setting.sh
-```
 
 ## 手动设置密钥登录
 

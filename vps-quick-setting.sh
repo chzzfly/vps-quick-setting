@@ -187,6 +187,95 @@ configure_hostname() {
     echo -e "${YELLOW}提示: 执行 'exec bash' 或重新登录以显示新主机名${NC}"
 }
 
+# Change SSH port safely
+change_ssh_port() {
+    local new_port=$1
+    local old_port=$SSH_PORT
+
+    # 验证端口号
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1024 ] || [ "$new_port" -gt 65535 ]; then
+        echo -e "${RED}✗ 无效端口号 (需要 1024-65535)${NC}"
+        return 1
+    fi
+
+    if [ "$new_port" = "$old_port" ]; then
+        echo -e "${YELLOW}⊘ 端口未变更${NC}"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${YELLOW}⚠ 即将执行:${NC}"
+    echo "  1. 开放新端口 $new_port"
+    echo "  2. 修改 sshd 配置"
+    echo "  3. 重启 sshd"
+    echo "  4. 关闭旧端口 $old_port"
+    echo ""
+
+    if ! ask_yes_no "确认修改 SSH 端口？" "N"; then
+        echo -e "${YELLOW}⊘ 取消端口修改${NC}"
+        return 0
+    fi
+
+    # 备份配置
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%Y%m%d_%H%M%S)
+
+    # 1. 先开放新端口（防止锁死）
+    echo -e "${CYAN}→ 开放新端口 $new_port${NC}"
+    if command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+        ufw allow ${new_port}/tcp comment 'SSH-new' || {
+            echo -e "${RED}✗ 无法开放新端口${NC}"
+            return 1
+        }
+    fi
+
+    # 2. 修改 sshd 配置
+    echo -e "${CYAN}→ 修改 sshd 配置${NC}"
+    if grep -q "^Port " /etc/ssh/sshd_config; then
+        sed -i "s/^Port .*/Port $new_port/" /etc/ssh/sshd_config
+    elif grep -q "^#Port " /etc/ssh/sshd_config; then
+        sed -i "s/^#Port .*/Port $new_port/" /etc/ssh/sshd_config
+    else
+        echo "Port $new_port" >> /etc/ssh/sshd_config
+    fi
+
+    # 验证配置
+    if ! sshd -t; then
+        echo -e "${RED}✗ 配置验证失败，回滚...${NC}"
+        cp /etc/ssh/sshd_config.backup.* /etc/ssh/sshd_config 2>/dev/null || true
+        ufw delete allow ${new_port}/tcp 2>/dev/null || true
+        return 1
+    fi
+
+    # 3. 重启 sshd
+    echo -e "${CYAN}→ 重启 sshd${NC}"
+    systemctl restart sshd || {
+        echo -e "${RED}✗ sshd 重启失败，回滚...${NC}"
+        cp /etc/ssh/sshd_config.backup.* /etc/ssh/sshd_config 2>/dev/null || true
+        systemctl restart sshd
+        return 1
+    }
+
+    # 4. 关闭旧端口（仅当新旧不同且防火墙启用时）
+    if command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+        echo -e "${CYAN}→ 关闭旧端口 $old_port${NC}"
+        ufw delete allow ${old_port}/tcp 2>/dev/null || true
+    fi
+
+    # 更新全局变量
+    SSH_PORT=$new_port
+
+    echo -e "${GREEN}✓ SSH 端口已修改: $old_port → $new_port${NC}"
+    echo ""
+    echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║${NC}  ${YELLOW}⚠ 重要：请在新终端测试连接！${NC}                          ${RED}║${NC}"
+    echo -e "${RED}║${NC}  ${CYAN}ssh -p $new_port root@服务器IP${NC}                         ${RED}║${NC}"
+    echo -e "${RED}║${NC}  ${YELLOW}确认成功后再关闭当前会话！${NC}                            ${RED}║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    return 0
+}
+
 # Install and configure fail2ban
 install_fail2ban() {
     echo -e "${CYAN}→ apt install -y fail2ban${NC}"
@@ -216,6 +305,21 @@ EOF
 # SSH Security Hardening
 configure_ssh() {
     echo -e "${CYAN}→ 配置 SSH (禁用密码登录 + 启用 fail2ban)${NC}"
+    echo ""
+    echo -e "  ${YELLOW}当前 SSH 端口: ${SSH_PORT}${NC}"
+
+    # 交互模式下询问是否修改端口
+    if [ "$AUTO_MODE" != true ]; then
+        echo ""
+        if ask_yes_no "是否修改 SSH 端口？" "N"; then
+            read -p "$(echo -e "${YELLOW}?${NC}" "请输入新端口 (1024-65535): ")" new_port
+            if [ -n "$new_port" ]; then
+                change_ssh_port "$new_port"
+            fi
+        fi
+    fi
+
+    echo ""
 
     # Check for SSH key
     if ! check_ssh_key; then
@@ -613,8 +717,8 @@ show_system_status() {
     echo "  物理内存: $(echo $mem_info | awk '{print $3 "/" $2}')"
 
     local swap_info=$(free -h | grep Swap)
-    local swap_used=$(echo $swap_info | awk '{print $3}')
-    if [ "$swap_used" != "0B" ]; then
+    local swap_total=$(echo $swap_info | awk '{print $2}')
+    if [ "$swap_total" != "0B" ] && [ "$swap_total" != "0" ]; then
         echo "  Swap:     $(echo $swap_info | awk '{print $3 "/" $2}')"
     else
         echo "  Swap:     未配置"
@@ -699,7 +803,17 @@ show_system_status() {
 
     # Listening Ports
     echo -e "${YELLOW}当前正在监听的端口:${NC}"
-    ss -tulpn 2>/dev/null | grep LISTEN | awk '{print "  " $5}' | head -10
+    ss -tulpn 2>/dev/null | grep LISTEN | awk '{
+        # 提取协议、地址和进程
+        proto = $1
+        addr = $5
+        proc = $7
+        # 从 users:(("sshd",pid=xxx,fd=x)) 提取进程名
+        gsub(/.*\(\(\"/, "", proc)
+        gsub(/\".*/, "", proc)
+        if (proc == "") proc = "-"
+        printf "  %-6s %-25s %s\n", proto, addr, proc
+    }' | head -10
     echo ""
 }
 
