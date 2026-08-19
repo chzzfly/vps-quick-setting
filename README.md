@@ -1,3 +1,5 @@
+
+
 # 新 VPS 一键设置脚本
 
 Make 新手的 VPS 安全 Again
@@ -87,7 +89,7 @@ cat ~/baseline/最新文件名.txt       # 查看指定基线文件
 
 ## 故障排除
 
-### 被锁定SSH外？
+### SSH 被锁定？
 
 - 用VPS提供商控制台登录
 - `sudo vim /etc/ssh/sshd_config`
